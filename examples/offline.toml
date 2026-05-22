@@ -1,0 +1,14 @@
+default_backend = "local"
+
+[chat]
+temperature = 0.0
+timeout_seconds = 30
+
+[storage]
+session_dir = ".icebreaker/example-sessions"
+
+[backends.local]
+type = "openai_compatible"
+model = "local-model"
+base_url = "http://127.0.0.1:1234/v1"
+api_key_env = ""

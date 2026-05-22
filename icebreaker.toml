@@ -1,0 +1,29 @@
+default_backend = "local"
+
+[chat]
+temperature = 0.5
+timeout_seconds = 120
+
+[storage]
+session_dir = ".icebreaker/sessions"
+
+[knowledge]
+enabled = true
+base_url = "http://192.168.0.3:8002/sse"
+timeout_seconds = 12
+api_key_env = ""
+max_results = 6
+tool_name = "search_local_knowledge"
+
+[command]
+enabled = false
+timeout_seconds = 30
+max_output_chars = 40000
+block_patterns = ["rm -rf", "rm -fr", "shutdown", "reboot", "poweroff", "halt", "mkfs", "dd "]
+tool_name = "run_command"
+
+[backends.local]
+type = "openai_compatible"
+model = "qwen3.5-35b-a3b-uncensored-hauhaucs-aggressive"
+base_url = "http://192.168.0.3:1234/v1"
+api_key_env = ""
