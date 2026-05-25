@@ -16,7 +16,7 @@ max_results = 6
 tool_name = "search_local_knowledge"
 
 [command]
-enabled = false
+enabled = true
 timeout_seconds = 30
 max_output_chars = 40000
 block_patterns = ["rm -rf", "rm -fr", "shutdown", "reboot", "poweroff", "halt", "mkfs", "dd "]
