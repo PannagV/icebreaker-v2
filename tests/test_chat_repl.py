@@ -64,6 +64,23 @@ class ScriptedKnowledgeTool:
         return self.results.pop(0)
 
 
+class ScriptedWebSearchTool:
+    def __init__(self, results: list[dict[str, object]]) -> None:
+        self.results = results
+        self.calls: list[tuple[str, str | None, int, int | None]] = []
+
+    def search(
+        self,
+        *,
+        query: str,
+        categories: str | None = None,
+        page: int = 1,
+        max_results: int | None = None,
+    ) -> dict[str, object]:
+        self.calls.append((query, categories, page, max_results))
+        return self.results.pop(0)
+
+
 def _make_config(tmp_path: Path) -> Config:
     config_path = tmp_path / "icebreaker.toml"
     config_path.write_text(
@@ -324,3 +341,66 @@ def test_tool_failure_warns_without_corrupting_session(tmp_path: Path) -> None:
 
     assert console.warnings
     assert "requires a non-empty string `query`" in console.warnings[-1]
+
+
+def test_tool_call_executes_web_search_and_persists_tool_message(tmp_path: Path) -> None:
+    config_path = tmp_path / "icebreaker.toml"
+    config_path.write_text(
+        render_config(
+            default_backend="local",
+            backends={
+                "local": {
+                    "type": "openai_compatible",
+                    "model": "local-model",
+                    "base_url": "http://127.0.0.1:1234/v1",
+                    "api_key_env": "",
+                }
+            },
+            web_search_enabled=True,
+            session_dir=str(tmp_path / "sessions"),
+        ),
+        encoding="utf-8",
+    )
+    config = Config.load(config_path)
+    transcripts: list[list[dict[str, str]]] = []
+    backend = ScriptedBackend(
+        [
+            ModelResponse(
+                tool_call=ToolCall(
+                    "search_web",
+                    {"query": "latest ai", "categories": "news", "page": 1, "max_results": 5},
+                    "call_1",
+                )
+            ),
+            ModelResponse(text="Here is the summary."),
+        ],
+        transcripts,
+    )
+    web_tool = ScriptedWebSearchTool(
+        [
+            {
+                "results": [
+                    {"title": "AI News", "url": "https://example.com", "snippet": "Update"}
+                ]
+            }
+        ]
+    )
+    repl = ChatRepl(
+        config=config,
+        console=CaptureConsole(),
+        backend_factory=lambda *_args: backend,
+        input_func=lambda _prompt, inputs=iter(["hello"]): next(inputs),
+    )
+    repl._web_search_tool = web_tool
+
+    asyncio.run(repl.run())
+
+    store = SessionStore(config.storage.session_dir)
+    saved = store.load_session(store.list_sessions()[0].session_id)
+
+    assert web_tool.calls == [("latest ai", "news", 1, 5)]
+    assert any(message["role"] == "tool" for message in saved.messages)
+    tool_message = next(message for message in saved.messages if message["role"] == "tool")
+    assert tool_message["name"] == "search_web"
+    assert json.loads(tool_message["content"])["results"][0]["title"] == "AI News"
+    assert transcripts[-1][-1]["role"] == "tool"

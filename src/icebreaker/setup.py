@@ -54,6 +54,23 @@ def run_setup_wizard(path: Path, console: Console, force: bool = False) -> None:
         knowledge_max_results = _prompt_int("Knowledge max results", knowledge_max_results)
         knowledge_tool_name = _prompt("Knowledge tool name", knowledge_tool_name)
 
+    web_search_enabled = _prompt_yes_no("Enable web search tool?", default=False)
+    web_search_base_url = "http://127.0.0.1:8003/sse"
+    web_search_timeout_seconds = 12
+    web_search_api_key_env = ""
+    web_search_max_results = 10
+    web_search_tool_name = "search_web"
+    web_search_prompt_enabled = False
+    if web_search_enabled:
+        web_search_base_url = _prompt("Web search base URL", web_search_base_url)
+        web_search_timeout_seconds = _prompt_int("Web search timeout seconds", web_search_timeout_seconds)
+        web_search_use_key = _prompt_yes_no("Use a web search API key env var?", default=False)
+        if web_search_use_key:
+            web_search_api_key_env = _prompt("Web search API key env var name", "WEB_SEARCH_API_KEY")
+        web_search_max_results = _prompt_int("Web search max results", web_search_max_results)
+        web_search_tool_name = _prompt("Web search tool name", web_search_tool_name)
+        web_search_prompt_enabled = _prompt_yes_no("Include MCP prompt in system prompt?", default=False)
+
     content = render_config(
         backends={
             draft.name: {
@@ -73,6 +90,13 @@ def run_setup_wizard(path: Path, console: Console, force: bool = False) -> None:
         knowledge_api_key_env=knowledge_api_key_env,
         knowledge_max_results=knowledge_max_results,
         knowledge_tool_name=knowledge_tool_name,
+        web_search_enabled=web_search_enabled,
+        web_search_base_url=web_search_base_url,
+        web_search_timeout_seconds=web_search_timeout_seconds,
+        web_search_api_key_env=web_search_api_key_env,
+        web_search_max_results=web_search_max_results,
+        web_search_tool_name=web_search_tool_name,
+        web_search_prompt_enabled=web_search_prompt_enabled,
     )
     write_rendered_config(path, content, force=force)
     console.success(f"Wrote {path}")

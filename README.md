@@ -48,6 +48,30 @@ timeout_seconds = 120
 [storage]
 session_dir = ".icebreaker/sessions"
 
+[knowledge]
+enabled = false
+base_url = "http://127.0.0.1:8002/sse"
+timeout_seconds = 12
+api_key_env = ""
+max_results = 6
+tool_name = "search_local_knowledge"
+
+[web_search]
+enabled = false
+base_url = "http://127.0.0.1:8003/sse"
+timeout_seconds = 12
+api_key_env = ""
+max_results = 10
+tool_name = "search_web"
+prompt_enabled = false
+
+[command]
+enabled = true
+timeout_seconds = 30
+max_output_chars = 40000
+block_patterns = ["rm -rf", "rm -fr", "shutdown", "reboot", "poweroff", "halt", "mkfs", "dd "]
+tool_name = "run_command"
+
 [backends.openai]
 type = "openai_compatible"
 model = "gpt-4.1-mini"

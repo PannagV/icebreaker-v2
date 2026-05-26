@@ -41,6 +41,15 @@ api_key_env = ""
 max_results = 6
 tool_name = "search_local_knowledge"
 
+[web_search]
+enabled = false
+base_url = "http://127.0.0.1:8003/sse"
+timeout_seconds = 12
+api_key_env = ""
+max_results = 10
+tool_name = "search_web"
+prompt_enabled = false
+
 [command]
 enabled = true
 timeout_seconds = 30
@@ -78,6 +87,17 @@ class KnowledgeConfig:
 
 
 @dataclass(frozen=True)
+class WebSearchConfig:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:8003/sse"
+    timeout_seconds: int = 12
+    api_key_env: str | None = None
+    max_results: int = 10
+    tool_name: str = "search_web"
+    prompt_enabled: bool = False
+
+
+@dataclass(frozen=True)
 class CommandConfig:
     enabled: bool = True
     timeout_seconds: int = 30
@@ -107,6 +127,7 @@ class Config:
     chat: ChatConfig
     storage: StorageConfig
     knowledge: KnowledgeConfig
+    web_search: WebSearchConfig
     command: CommandConfig
     backends: dict[str, BackendConfig] = field(default_factory=dict)
 
@@ -129,6 +150,7 @@ class Config:
         chat = data.get("chat", {})
         storage = data.get("storage", {})
         knowledge = data.get("knowledge", {})
+        web_search = data.get("web_search", {})
         command = data.get("command", {})
 
         backends = {
@@ -144,6 +166,7 @@ class Config:
             ),
             storage=StorageConfig(session_dir=Path(storage.get("session_dir", ".icebreaker/sessions"))),
             knowledge=_parse_knowledge_config(knowledge),
+            web_search=_parse_web_search_config(web_search),
             command=_parse_command_config(command),
             backends=backends,
         )
@@ -176,6 +199,13 @@ def render_config(
     knowledge_api_key_env: str = "",
     knowledge_max_results: int = 6,
     knowledge_tool_name: str = "search_local_knowledge",
+    web_search_enabled: bool = False,
+    web_search_base_url: str = "http://127.0.0.1:8003/sse",
+    web_search_timeout_seconds: int = 12,
+    web_search_api_key_env: str = "",
+    web_search_max_results: int = 10,
+    web_search_tool_name: str = "search_web",
+    web_search_prompt_enabled: bool = False,
     command_enabled: bool = False,
     command_timeout_seconds: int = 30,
     command_max_output_chars: int = 40000,
@@ -205,6 +235,15 @@ def render_config(
         f"api_key_env = {_toml_string(knowledge_api_key_env)}",
         f"max_results = {knowledge_max_results}",
         f"tool_name = {_toml_string(knowledge_tool_name)}",
+        "",
+        "[web_search]",
+        f"enabled = {str(web_search_enabled).lower()}",
+        f"base_url = {_toml_string(web_search_base_url)}",
+        f"timeout_seconds = {web_search_timeout_seconds}",
+        f"api_key_env = {_toml_string(web_search_api_key_env)}",
+        f"max_results = {web_search_max_results}",
+        f"tool_name = {_toml_string(web_search_tool_name)}",
+        f"prompt_enabled = {str(web_search_prompt_enabled).lower()}",
         "",
         "[command]",
         f"enabled = {str(command_enabled).lower()}",
@@ -277,6 +316,24 @@ def _parse_knowledge_config(knowledge: object) -> KnowledgeConfig:
         api_key_env=str(knowledge.get("api_key_env", "")).strip() or None,
         max_results=int(knowledge.get("max_results", 6)),
         tool_name=str(knowledge.get("tool_name", "search_local_knowledge")),
+    )
+
+
+def _parse_web_search_config(web_search: object) -> WebSearchConfig:
+    if not isinstance(web_search, dict):
+        return WebSearchConfig()
+    enabled = bool(web_search.get("enabled", False))
+    timeout_seconds = int(web_search.get("timeout_seconds", 12))
+    if enabled and timeout_seconds <= 0:
+        raise ValueError("Web search timeout must be a positive integer.")
+    return WebSearchConfig(
+        enabled=enabled,
+        base_url=str(web_search.get("base_url", "http://127.0.0.1:8003/sse")),
+        timeout_seconds=timeout_seconds,
+        api_key_env=str(web_search.get("api_key_env", "")).strip() or None,
+        max_results=int(web_search.get("max_results", 10)),
+        tool_name=str(web_search.get("tool_name", "search_web")),
+        prompt_enabled=bool(web_search.get("prompt_enabled", False)),
     )
 
 

@@ -7,77 +7,84 @@ from typing import Any
 from urllib import request
 from urllib.parse import urljoin
 
-from icebreaker.config import KnowledgeConfig
+from icebreaker.config import WebSearchConfig
 from icebreaker.llm.base import ToolDefinition
 
 
-class LocalKnowledgeError(RuntimeError):
+class WebSearchError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
-class KnowledgeResult:
-    title: str
-    snippet: str
-    source: str
-    score: float
-    category: str
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "title": self.title,
-            "snippet": self.snippet,
-            "source": self.source,
-            "score": self.score,
-            "category": self.category,
-        }
+class WebSearchPrompt:
+    name: str
+    text: str
 
 
-@dataclass(frozen=True)
-class KnowledgeSearchResponse:
-    query: str
-    category: str | None
-    results: list[KnowledgeResult]
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "query": self.query,
-            "category": self.category,
-            "results": [result.to_dict() for result in self.results],
-        }
-
-
-class LocalKnowledgeTool:
-    def __init__(self, config: KnowledgeConfig, urlopen=request.urlopen) -> None:
+class WebSearchTool:
+    def __init__(self, config: WebSearchConfig, urlopen=request.urlopen) -> None:
         self.config = config
         self._urlopen = urlopen
+        self._cached_prompt: WebSearchPrompt | None = None
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name=self.config.tool_name,
-            description="Search the local knowledge base for relevant context.",
+            description="Search the web for recent information.",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "category": {"type": ["string", "null"]},
+                    "categories": {"type": "string"},
+                    "page": {"type": "integer", "minimum": 1},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 20},
                 },
                 "required": ["query"],
             },
         )
 
-    def search(self, *, query: str, category: str | None = None) -> KnowledgeSearchResponse:
+    def search(
+        self,
+        *,
+        query: str,
+        categories: str | None = None,
+        page: int = 1,
+        max_results: int | None = None,
+    ) -> dict[str, Any]:
         if not self.config.enabled:
-            raise LocalKnowledgeError("Local knowledge search is disabled.")
+            raise WebSearchError("Web search is disabled.")
         stream = self._open_sse()
         endpoint = self._read_endpoint(stream)
         self._initialize(stream, endpoint)
         self._notify_initialized(endpoint)
         tools = self._list_tools(stream, endpoint)
-        if self.config.tool_name not in {tool["name"] for tool in tools}:
-            raise LocalKnowledgeError("Knowledge tool is not available in the MCP server response.")
-        result = self._call_tool(stream, endpoint, query=query, category=category)
-        return self._parse_result(query, category, result)
+        if self.config.tool_name not in {tool.get("name") for tool in tools}:
+            raise WebSearchError("Web search tool is not available in the MCP server response.")
+        result = self._call_tool(
+            stream,
+            endpoint,
+            query=query,
+            categories=categories,
+            page=page,
+            max_results=max_results,
+        )
+        payload = result.get("result")
+        if isinstance(payload, dict):
+            return payload
+        return {"result": payload}
+
+    def prompt(self) -> WebSearchPrompt | None:
+        if not self.config.prompt_enabled:
+            return None
+        if self._cached_prompt:
+            return self._cached_prompt
+        stream = self._open_sse()
+        endpoint = self._read_endpoint(stream)
+        self._initialize(stream, endpoint)
+        self._notify_initialized(endpoint)
+        prompt = self._read_prompt(stream, endpoint)
+        self._cached_prompt = prompt
+        return prompt
 
     def _open_sse(self):
         headers = {"Accept": "text/event-stream"}
@@ -97,7 +104,7 @@ class LocalKnowledgeTool:
                 endpoint = str(event.get("data", ""))
                 if endpoint:
                     return endpoint
-        raise LocalKnowledgeError("Unable to read MCP endpoint from SSE stream.")
+        raise WebSearchError("Unable to read MCP endpoint from SSE stream.")
 
     def _initialize(self, stream, endpoint: str) -> None:
         payload = {
@@ -123,13 +130,47 @@ class LocalKnowledgeTool:
         response = _read_until_id(stream, 2)
         tools = response.get("result", {}).get("tools")
         if not isinstance(tools, list):
-            raise LocalKnowledgeError("Knowledge tools list response is malformed.")
+            raise WebSearchError("Web search tools list response is malformed.")
         return tools
 
-    def _call_tool(self, stream, endpoint: str, *, query: str, category: str | None) -> dict[str, Any]:
-        arguments: dict[str, object] = {"query": query, "max_results": self.config.max_results}
-        if isinstance(category, str) and category.strip():
-            arguments["category"] = category
+    def _read_prompt(self, stream, endpoint: str) -> WebSearchPrompt:
+        payload = {"jsonrpc": "2.0", "id": 4, "method": "prompts/list", "params": {}}
+        self._post(endpoint, payload)
+        response = _read_until_id(stream, 4)
+        prompts = response.get("result", {}).get("prompts")
+        if not isinstance(prompts, list) or not prompts:
+            raise WebSearchError("Web search prompt list response is malformed.")
+        name = str(prompts[0].get("name", "")).strip()
+        if not name:
+            raise WebSearchError("Web search prompt list did not return a name.")
+        payload = {"jsonrpc": "2.0", "id": 5, "method": "prompts/get", "params": {"name": name}}
+        self._post(endpoint, payload)
+        response = _read_until_id(stream, 5)
+        prompt_payload = response.get("result")
+        text = _extract_prompt_text(prompt_payload)
+        if not text:
+            raise WebSearchError("Web search prompt payload is malformed.")
+        return WebSearchPrompt(name=name, text=text)
+
+    def _call_tool(
+        self,
+        stream,
+        endpoint: str,
+        *,
+        query: str,
+        categories: str | None,
+        page: int,
+        max_results: int | None,
+    ) -> dict[str, Any]:
+        max_results_value = max_results if max_results is not None else self.config.max_results
+        max_results_value = min(max(int(max_results_value), 1), 20)
+        arguments: dict[str, object] = {
+            "query": query,
+            "page": max(int(page), 1),
+            "max_results": max_results_value,
+        }
+        if isinstance(categories, str) and categories.strip():
+            arguments["categories"] = categories
         payload = {
             "jsonrpc": "2.0",
             "id": 3,
@@ -138,46 +179,6 @@ class LocalKnowledgeTool:
         }
         self._post(endpoint, payload)
         return _read_until_id(stream, 3)
-
-    def _parse_result(
-        self, query: str, category: str | None, result: dict[str, Any]
-    ) -> KnowledgeSearchResponse:
-        payload = result.get("result", {})
-        content = payload.get("structuredContent")
-        if isinstance(content, dict):
-            raw_results = content.get("results")
-            if isinstance(raw_results, dict):
-                raw_results = [raw_results]
-            if isinstance(raw_results, list):
-                parsed = [
-                    KnowledgeResult(
-                        title=str(item.get("title", "")),
-                        snippet=str(item.get("snippet", "")),
-                        source=str(item.get("source", "")),
-                        score=float(item.get("score", 0.0)),
-                        category=str(item.get("category", "")),
-                    )
-                    for item in raw_results
-                ]
-                return KnowledgeSearchResponse(query=query, category=category, results=parsed)
-
-        fallback = _extract_content_text(payload.get("content"))
-        if fallback:
-            return KnowledgeSearchResponse(
-                query=query,
-                category=category,
-                results=[
-                    KnowledgeResult(
-                        title="Knowledge response",
-                        snippet=fallback,
-                        source="mcp",
-                        score=0.0,
-                        category=str(category or ""),
-                    )
-                ],
-            )
-
-        raise LocalKnowledgeError("Knowledge tool result malformed.")
 
     def _post(self, endpoint: str, payload: dict[str, object]) -> None:
         url = urljoin(self.config.base_url, endpoint)
@@ -211,7 +212,7 @@ def _read_until_id(stream, message_id: int) -> dict[str, Any]:
         payload = event.get("data")
         if isinstance(payload, dict) and payload.get("id") == message_id:
             return payload
-    raise LocalKnowledgeError("Knowledge SSE stream did not return expected response.")
+    raise WebSearchError("Web search SSE stream did not return expected response.")
 
 
 def _read_next_event(stream) -> dict[str, object] | None:
@@ -244,23 +245,23 @@ def _parse_data(raw: str) -> object:
     return raw
 
 
-def _extract_content_text(content: object) -> str | None:
-    if isinstance(content, str):
-        return content.strip() or None
-    if isinstance(content, dict):
-        text = content.get("text") or content.get("content")
-        if isinstance(text, str):
-            return text.strip() or None
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") == "text" and isinstance(item.get("text"), str):
-                parts.append(item["text"].strip())
-            if item.get("type") == "json" and isinstance(item.get("json"), dict):
-                json_text = json.dumps(item["json"], ensure_ascii=True)
-                parts.append(json_text)
-        joined = "\n".join(part for part in parts if part)
-        return joined or None
+def _extract_prompt_text(payload: object) -> str | None:
+    if isinstance(payload, str):
+        return payload.strip() or None
+    if isinstance(payload, dict):
+        for key in ("text", "prompt", "template", "content"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            parts: list[str] = []
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    parts.append(content.strip())
+            if parts:
+                return "\n".join(parts)
     return None

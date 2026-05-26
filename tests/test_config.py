@@ -32,6 +32,13 @@ def test_loads_named_backends_and_default(tmp_path: Path) -> None:
             knowledge_api_key_env="KNOWLEDGE_API_KEY",
             knowledge_max_results=8,
             knowledge_tool_name="search_local_knowledge",
+            web_search_enabled=True,
+            web_search_base_url="http://192.168.1.50:8003/sse",
+            web_search_timeout_seconds=9,
+            web_search_api_key_env="WEB_SEARCH_API_KEY",
+            web_search_max_results=12,
+            web_search_tool_name="search_web",
+            web_search_prompt_enabled=True,
         ),
         encoding="utf-8",
     )
@@ -47,6 +54,13 @@ def test_loads_named_backends_and_default(tmp_path: Path) -> None:
     assert config.knowledge.api_key_env == "KNOWLEDGE_API_KEY"
     assert config.knowledge.max_results == 8
     assert config.knowledge.tool_name == "search_local_knowledge"
+    assert config.web_search.enabled is True
+    assert config.web_search.base_url == "http://192.168.1.50:8003/sse"
+    assert config.web_search.timeout_seconds == 9
+    assert config.web_search.api_key_env == "WEB_SEARCH_API_KEY"
+    assert config.web_search.max_results == 12
+    assert config.web_search.tool_name == "search_web"
+    assert config.web_search.prompt_enabled is True
     assert config.resolve_backend().name == "local"
     assert config.resolve_backend("openai").model == "gpt-4.1-mini"
 
@@ -121,4 +135,27 @@ def test_rejects_invalid_knowledge_timeout(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="Knowledge timeout"):
+        Config.load(config_path)
+
+
+def test_rejects_invalid_web_search_timeout(tmp_path: Path) -> None:
+    config_path = tmp_path / "icebreaker.toml"
+    config_path.write_text(
+        render_config(
+            default_backend="local",
+            backends={
+                "local": {
+                    "type": "openai_compatible",
+                    "model": "local-model",
+                    "base_url": "http://127.0.0.1:1234/v1",
+                    "api_key_env": "",
+                }
+            },
+            web_search_enabled=True,
+            web_search_timeout_seconds=0,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Web search timeout"):
         Config.load(config_path)

@@ -11,6 +11,7 @@ from icebreaker.repl.commands import ReplCommand, parse_repl_command
 from icebreaker.storage.sessions import SessionStore, SessionStoreError, StoredSession, timestamp_now
 from icebreaker.tools.command_exec import CommandExecutionError, CommandExecutor
 from icebreaker.tools.local_knowledge import LocalKnowledgeError, LocalKnowledgeTool
+from icebreaker.tools.web_search import WebSearchError, WebSearchTool
 from icebreaker.ui.console import Console
 
 
@@ -60,6 +61,7 @@ class ChatRepl:
         self.input_func = input_func
         self._backend_cache: dict[str, ChatModel] = {}
         self._knowledge_tool = LocalKnowledgeTool(config.knowledge) if config.knowledge.enabled else None
+        self._web_search_tool = WebSearchTool(config.web_search) if config.web_search.enabled else None
         self._command_tool = CommandExecutor(config.command) if config.command.enabled else None
 
     async def run(self, backend_name: str | None = None) -> None:
@@ -200,16 +202,28 @@ class ChatRepl:
         tool_lines = []
         if self._knowledge_tool:
             tool_lines.append("- You can call a local knowledge search tool when helpful.")
+        if self._web_search_tool:
+            tool_lines.append("- You can call a web search tool when fresh context is needed.")
         if self._command_tool:
             tool_lines.append("- You can run commands via the command tool for user-approved tasks.")
         if tool_lines:
             prompt = prompt + "\n" + "\n".join(tool_lines)
+        if self._web_search_tool:
+            try:
+                web_prompt = self._web_search_tool.prompt()
+            except WebSearchError as exc:
+                self.console.warn(str(exc))
+                web_prompt = None
+            if web_prompt and web_prompt.text.strip():
+                prompt = prompt + "\n\n" + web_prompt.text.strip()
         return prompt
 
     def _tool_definitions(self) -> list[ToolDefinition] | None:
         tools: list[ToolDefinition] = []
         if self._knowledge_tool and hasattr(self._knowledge_tool, "definition"):
             tools.append(self._knowledge_tool.definition())
+        if self._web_search_tool and hasattr(self._web_search_tool, "definition"):
+            tools.append(self._web_search_tool.definition())
         if self._command_tool and hasattr(self._command_tool, "definition"):
             tools.append(self._command_tool.definition())
         return tools or None
@@ -247,6 +261,8 @@ class ChatRepl:
     def _execute_tool_call(self, tool_call: ToolCall) -> dict[str, object] | None:
         if tool_call.name == self.config.knowledge.tool_name:
             return self._run_knowledge_tool(tool_call)
+        if tool_call.name == self.config.web_search.tool_name:
+            return self._run_web_search_tool(tool_call)
         if tool_call.name == self.config.command.tool_name:
             return self._run_command_tool(tool_call)
         self.console.warn(f"Unknown tool: {tool_call.name}")
@@ -294,4 +310,41 @@ class ChatRepl:
             "name": tool_call.name,
             "tool_call_id": tool_call.call_id,
             "content": json.dumps(result.to_dict()),
+        }
+
+    def _run_web_search_tool(self, tool_call: ToolCall) -> dict[str, object] | None:
+        if not self._web_search_tool:
+            self.console.warn("Web search tool is not enabled.")
+            return None
+        query = tool_call.arguments.get("query")
+        if not isinstance(query, str) or not query.strip():
+            self.console.warn("Web search requires a non-empty string `query`.")
+            return None
+        categories = tool_call.arguments.get("categories")
+        if categories is not None and not isinstance(categories, str):
+            self.console.warn("Web search `categories` must be a string or null.")
+            return None
+        page = tool_call.arguments.get("page", 1)
+        if not isinstance(page, int):
+            self.console.warn("Web search `page` must be an integer.")
+            return None
+        max_results = tool_call.arguments.get("max_results")
+        if max_results is not None and not isinstance(max_results, int):
+            self.console.warn("Web search `max_results` must be an integer.")
+            return None
+        try:
+            result = self._web_search_tool.search(
+                query=query.strip(),
+                categories=categories,
+                page=page,
+                max_results=max_results,
+            )
+        except WebSearchError as exc:
+            self.console.warn(str(exc))
+            return None
+        return {
+            "role": "tool",
+            "name": tool_call.name,
+            "tool_call_id": tool_call.call_id,
+            "content": json.dumps(result),
         }
